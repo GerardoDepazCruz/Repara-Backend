@@ -2,6 +2,7 @@
 package com.repara.config;
 
 import com.repara.service.UserDetailsServiceImpl;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -21,6 +22,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
+import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -36,25 +38,38 @@ public class SecurityConfig {
         http
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             .csrf(csrf -> csrf.disable())
-            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)) // ← Cambiar a IF_REQUIRED para OAuth2
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/auth/**").permitAll()
-                .requestMatchers("/api/public/**").permitAll()
-                .requestMatchers("/oauth2/**").permitAll()
-                .requestMatchers("/login/**").permitAll()
-                .requestMatchers("/api/postulaciones/**").authenticated()
+                // ✅ Rutas públicas (CON y SIN /api, por si acaso)
+                .requestMatchers("/auth/**", "/api/auth/**").permitAll()
+                .requestMatchers("/public/**", "/api/public/**").permitAll()
+                .requestMatchers("/oauth2/**", "/login/oauth2/**").permitAll()
+                .requestMatchers("/error").permitAll()
+
+                // Rutas protegidas
                 .requestMatchers("/api/postulaciones/pendientes").hasRole("ADMIN")
                 .requestMatchers("/api/postulaciones/*/aprobar").hasRole("ADMIN")
                 .requestMatchers("/api/postulaciones/*/rechazar").hasRole("ADMIN")
-                .requestMatchers("/api/admin/**").hasRole("ADMIN")
-                .requestMatchers("/api/tecnico/**").hasAnyRole("TECNICO", "ADMIN")
-                .requestMatchers("/api/usuario/**").hasAnyRole("CLIENTE", "TECNICO", "ADMIN")
+                .requestMatchers("/api/postulaciones/**", "/postulaciones/**").authenticated()
+                .requestMatchers("/api/admin/**", "/admin/**").hasRole("ADMIN")
+                .requestMatchers("/api/tecnico/**", "/tecnico/**").hasAnyRole("TECNICO", "ADMIN")
+                .requestMatchers("/api/usuario/**", "/usuario/**").hasAnyRole("CLIENTE", "TECNICO", "ADMIN")
+
                 .anyRequest().authenticated()
             )
             .oauth2Login(oauth2 -> oauth2
-                .loginPage("/login")
-                .defaultSuccessUrl("/oauth2/success", true)
-                .failureUrl("http://localhost:3000/login?error=true")
+                // 👇 Quitamos loginPage("/login") que causaba el bucle infinito
+                .defaultSuccessUrl("http://localhost:5173/oauth2/success", true)
+                .failureUrl("http://localhost:5173/login?error=true")
+            )
+            // ✅ Clave: 401 en vez de redirect a /login
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint((request, response, authException) -> {
+                    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+                    response.setContentType("application/json");
+                    response.getWriter().write("{\"error\":\"No autorizado\",\"message\":\"" 
+                        + authException.getMessage() + "\"}");
+                })
             )
             .authenticationProvider(authenticationProvider())
             .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -65,10 +80,16 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOrigins(Arrays.asList("http://localhost:3000"));
-        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("*"));
+        // ✅ Permitir 3000 (CRA) y 5173 (Vite)
+        configuration.setAllowedOrigins(Arrays.asList(
+            "http://localhost:3000",
+            "http://localhost:5173"
+        ));
+        configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
+        configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);
+        configuration.setExposedHeaders(List.of("Authorization"));
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         return source;
